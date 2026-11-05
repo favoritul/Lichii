@@ -7,9 +7,11 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstring>
 #include <limits>
 #include <optional>
+#include <thread>
 #include "common/assert.h"
 #include "common/bit_util.h"
 #include "common/scope_exit.h"
@@ -1190,6 +1192,7 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
     if (VideoCommon::Nx2Profile::Enabled()) {
         VideoCommon::Nx2Profile::Add(VideoCommon::Nx2Profile::Counter::DmaReadBytes, read_bytes);
     }
+    WaitForQueryWrites(source, read_bytes);
     if (memory_manager.IsMemoryDirty(source, read_bytes, VideoCommon::CacheType::BufferCache)) {
         split.Run(
             [memory = &memory_manager, source, read_bytes] {
@@ -1216,6 +1219,61 @@ void Maxwell3D::FrontDmaRead(VideoCommon::GpuSplit& split, FrontState& fs, u32 m
             gpu_written |= device && Tegra::Nx2IsGpuWritten(*device);
         }
         Tegra::Nx2CmdPageDiag::RecordDmaRead(source, words, changed, gpu_written);
+    }
+}
+
+void Maxwell3D::WaitForQueryWrites(GPUVAddr source, size_t size) {
+    // Host query results (occlusion sample counts) reach guest memory only once the host GPU
+    // passed the fence they were committed with: the fencing thread writes them. Games read them
+    // with the MME after a semaphore acquire, which on hardware orders the read after the
+    // report, but here the semaphore's release is written at once, so a late fencing thread
+    // left the macro an older frame's result (Ocarina of Time's predicate macro skips or draws
+    // Link's parts by it).
+    const auto pending = [&] {
+        for (GPUVAddr page = source & ~GPUVAddr{0xfff}; page < source + size; page += 0x1000) {
+            const GPUVAddr begin = std::max(page, source);
+            const GPUVAddr end = std::min<GPUVAddr>(page + 0x1000, source + size);
+            if (const auto device = memory_manager.GpuToCpuAddress(begin);
+                device && rasterizer->HasPendingQueryWrites(*device, end - begin)) {
+                return true;
+            }
+        }
+        return false;
+    };
+    if (!pending()) {
+        return;
+    }
+    const auto start = std::chrono::steady_clock::now();
+    // The rasterizer belongs to the split's back: it commits them to a fence and submits it.
+    // The fencing thread then writes them without anything from this thread.
+    VideoCommon::GpuSplit::Get().Run(
+        [rasterizer = rasterizer] { rasterizer->SubmitPendingQueryWrites(); },
+        VideoCommon::DrainSite::MacroDmaQuery);
+    bool timed_out = false;
+    for (u32 spins = 0; pending(); ++spins) {
+        if (std::chrono::steady_clock::now() - start > std::chrono::milliseconds{100}) {
+            timed_out = true;
+            break;
+        }
+        if (spins < 64) {
+            std::this_thread::yield();
+        } else {
+            std::this_thread::sleep_for(std::chrono::microseconds{50});
+        }
+    }
+    static std::atomic<u64> waits{};
+    static std::atomic<u64> wait_us{};
+    const u64 elapsed = static_cast<u64>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                             std::chrono::steady_clock::now() - start)
+                                             .count());
+    const u64 total_us = wait_us.fetch_add(elapsed, std::memory_order_relaxed) + elapsed;
+    const u64 count = waits.fetch_add(1, std::memory_order_relaxed) + 1;
+    if (timed_out) {
+        LOG_WARNING(HW_GPU, "Native MME DMA read at {:#x}: query results still unwritten after 100 ms",
+                    source);
+    } else if (count % 2000 == 1) {
+        LOG_INFO(HW_GPU, "Native MME DMA read waited for query results ({} times, {} us on average)",
+                 count, total_us / count);
     }
 }
 

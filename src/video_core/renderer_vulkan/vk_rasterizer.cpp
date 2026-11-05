@@ -1504,6 +1504,18 @@ bool RasterizerVulkan::MustFlushRegion(DAddr addr, u64 size, VideoCommon::CacheT
     return false;
 }
 
+bool RasterizerVulkan::HasPendingQueryWrites(DAddr addr, u64 size) {
+    // Queries stay registered from their report until the fencing thread wrote them.
+    return query_cache.IsRegionGpuModified(addr, size);
+}
+
+void RasterizerVulkan::SubmitPendingQueryWrites() {
+    // An empty fence commits the queries still uncommitted; a deferred fence flush
+    // (Scheduler::DeferFlush) would otherwise wait for the back to go idle.
+    fence_manager.SignalReference();
+    scheduler.FlushDeferred();
+}
+
 VideoCore::RasterizerDownloadArea RasterizerVulkan::GetFlushArea(DAddr addr, u64 size) {
     {
         std::scoped_lock lock{texture_cache.mutex};

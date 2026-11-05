@@ -120,6 +120,17 @@ public:
     virtual bool MustFlushRegion(DAddr addr, u64 size,
                                  VideoCommon::CacheType which = VideoCommon::CacheType::All) = 0;
 
+    /// Any thread: whether host query results (occlusion sample counts) for the area are still
+    /// to be written to guest memory, which happens once the host GPU passed their fence.
+    [[nodiscard]] virtual bool HasPendingQueryWrites([[maybe_unused]] DAddr addr,
+                                                     [[maybe_unused]] u64 size) {
+        return false;
+    }
+
+    /// Commits the pending query results to a fence and submits it, so they get written
+    /// without waiting for more GPU work (on the split's back).
+    virtual void SubmitPendingQueryWrites() {}
+
     virtual RasterizerDownloadArea GetFlushArea(DAddr addr, u64 size) = 0;
 
     /// Notify rasterizer that any caches of the specified region should be invalidated

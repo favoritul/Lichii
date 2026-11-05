@@ -109,6 +109,8 @@ public:
     void NoteGpuWrittenCommandListSynced(DAddr page) override;
     bool MustFlushRegion(DAddr addr, u64 size,
                          VideoCommon::CacheType which = VideoCommon::CacheType::All) override;
+    bool HasPendingQueryWrites(DAddr addr, u64 size) override;
+    void SubmitPendingQueryWrites() override;
     VideoCore::RasterizerDownloadArea GetFlushArea(DAddr addr, u64 size) override;
     void InvalidateRegion(DAddr addr, u64 size,
                           VideoCommon::CacheType which = VideoCommon::CacheType::All) override;

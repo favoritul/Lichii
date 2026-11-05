@@ -35,6 +35,7 @@ enum class DrainSite : u32 {
     ListFlush,      ///< Command lists on GPU-written pages: drain and flush the pages
     MacroDmaRead,   ///< The front's macros read memory (MME DMA)
     MacroDmaFlush,  ///< Those words are in the buffer cache
+    MacroDmaQuery,  ///< Those words are query results the GPU has not written yet
     GpSyncFence,    ///< A GP entry's sync bit (sync_memory_operations)
     Map,            ///< GPU memory maps before later command reads
     FrontStart,     ///< The front takes an engine's macros over
@@ -45,6 +46,7 @@ enum class DrainSite : u32 {
 inline constexpr std::array<const char*, static_cast<size_t>(DrainSite::Count)> drain_site_names{
     "other",       "fetch drain",     "acquire",    "semaphore flush", "fence release",
     "list writers", "list sync",      "list flush", "macro dma read",  "macro dma flush",
+    "macro dma query",
     "gp sync fence", "map",           "front start", "front verify",
 };
 
